@@ -1,0 +1,15 @@
+name: SEO check
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docket:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mattkerr09/docket-audit-action@v1
+        with:
+          url: https://staging.example.com
+          fail-on: critical
+          pages: 100

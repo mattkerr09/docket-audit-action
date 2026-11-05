@@ -1,0 +1,107 @@
+name: 'Docket SEO audit'
+description: 'Audit a site with Docket and fail the job when it finds problems at or above a severity you pick.'
+author: 'Matt Kerr'
+
+branding:
+  icon: 'search'
+  color: 'green'
+
+inputs:
+  url:
+    description: 'The site to audit. https:// is assumed if you leave it off.'
+    required: true
+  fail-on:
+    description: >-
+      Fail the job at this severity or worse: critical, high, medium, low, notice,
+      or never. Most real sites have some high findings, so critical is the default.
+    required: false
+    default: 'critical'
+  pages:
+    description: 'How many pages to crawl.'
+    required: false
+    default: '100'
+  version:
+    description: 'A Docket release tag such as v1.3.147, or latest.'
+    required: false
+    default: 'latest'
+
+outputs:
+  exit-code:
+    description: '0 passed, 2 problems at or above fail-on, 1 Docket could not run.'
+    value: ${{ steps.audit.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Docket
+      shell: bash
+      env:
+        DOCKET_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        os="$(uname -s)"; arch="$(uname -m)"
+        case "$os/$arch" in
+          Linux/x86_64)  asset_kind=linux ;;
+          Darwin/arm64)  asset_kind=mac-arm64 ;;
+          Darwin/x86_64) asset_kind=mac-x86_64 ;;
+          *)
+            echo "::error::Docket has builds for Linux x86_64 and macOS. This runner is $os/$arch."
+            exit 1 ;;
+        esac
+
+        tag="$DOCKET_VERSION"
+        if [ "$tag" = "latest" ]; then
+          # The releases page redirects /latest to /tag/<tag>. No API call, so no rate limit.
+          tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/mattkerr09/docket-site/releases/latest)"
+          tag="${tag##*/}"
+        fi
+        version="${tag#v}"
+        base="https://github.com/mattkerr09/docket-site/releases/download/$tag"
+        case "$asset_kind" in
+          linux)      file="docket-$version-linux-x86_64.tar.gz" ;;
+          mac-arm64)  file="Docket-$version-arm64.dmg" ;;
+          mac-x86_64) file="Docket-$version-x86_64.dmg" ;;
+        esac
+
+        cd "$RUNNER_TEMP"
+        curl -fsSLO "$base/$file"
+        curl -fsSLO "$base/SHA256SUMS"
+        grep " $file\$" SHA256SUMS > want.sha256
+        if command -v sha256sum >/dev/null; then sha256sum -c want.sha256; else shasum -a 256 -c want.sha256; fi
+
+        if [ "$asset_kind" = linux ]; then
+          mkdir -p docket && tar -xzf "$file" -C docket
+          echo "$RUNNER_TEMP/docket" >> "$GITHUB_PATH"
+        else
+          hdiutil attach -nobrowse -quiet "$file" -mountpoint "$RUNNER_TEMP/docket-vol"
+          cp -R "$RUNNER_TEMP/docket-vol/Docket.app" "$RUNNER_TEMP/Docket.app"
+          hdiutil detach "$RUNNER_TEMP/docket-vol" -quiet
+          echo "$RUNNER_TEMP/Docket.app/Contents/Resources/docket" >> "$GITHUB_PATH"
+        fi
+        echo "Docket $version installed"
+
+    - name: Audit
+      id: audit
+      shell: bash
+      env:
+        URL: ${{ inputs.url }}
+        PAGES: ${{ inputs.pages }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        set -uo pipefail
+        # GitHub runs this step with bash -e. Turn that off so a failing audit still
+        # writes the exit code and the job summary before the step fails.
+        set +e
+        docket audit "$URL" -n "$PAGES" --fail-on "$FAIL_ON" | tee "$RUNNER_TEMP/docket.txt"
+        code=${PIPESTATUS[0]}
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        {
+          echo '### Docket audit of '"$URL"
+          echo '```'
+          cat "$RUNNER_TEMP/docket.txt"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$code" = "1" ]; then
+          echo "::error::Docket could not run. That is a tool problem, not a finding about the site."
+        fi
+        exit "$code"
