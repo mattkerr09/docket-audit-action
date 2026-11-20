@@ -43,4 +43,4 @@ Linux x86_64 (`ubuntu-latest`) and macOS on Apple silicon or Intel. There is no 
 
 The free version does not list every problem or write SARIF or JUnit files. Those come with a licence, which activates on up to 3 computers at a time. A fresh CI runner counts as a new computer each time, so this action sticks to the free version.
 
-Docket and the full app: https://docketseo.app
+Docket and the full app: https://checkengineseo.com
